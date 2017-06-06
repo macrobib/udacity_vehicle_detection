@@ -1,9 +1,10 @@
-import cv2
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimage
-import numpy as np
 import random
 import glob
+import cv2
+from moviepy.editor import VideoFileClip 
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimage
 from skimage.feature import hog
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
@@ -346,8 +347,94 @@ def find_cars(img, ystart, ystop, scale, svc, orient, pix_per_cell, cell_per_blo
               spatial_size, hist_bins):
     """Search for the cars."""
     draw_img = np.copy(img)
+    img_to_search = img[ystart:ystop, :, :, :];
+    trans_to_search = handle_colorspace(img_to_search, 'YCrCb')
+    if scale != 1:
+        imshape = img.shape
+        trans_to_search = cv2.resize(trans_to_search, (np.int(imshape[1])/scale)
+                , np.int(imshape[0])/scale)
+    ch1 = trans_to_search[:, :, 0]
+    ch2 = trans_to_search[:, :, 1]
+    ch3 = trans_to_search[:, :, 2]
+    # Define the number of blocks and steps.
+    window = 64 # Default window size.
+    nxblocks = (ch1.shape[1] // pix_per_cell) - cell_per_block + 1 # No of x blocks.
+    nyblocks = (ch1.shape[0] // pix_per_cell) - cell_per_block + 1 # No of y blocks.
+    nblocks_per_window = (window // pix_per_cell) - cell_per_block + 1
+    cells_per_step = 2 # Similar to approach above but no of cells instead of % overlap.
+    nxsteps = (nxblocks - nblocks_per_window) // cell_per_step
+    nysteps = (nyblocks - nblock_per_window) // cell_per_step
 
+    # Compute the hog feature for the entire image.
+    hog1 = get_hog_features(ch1, orient, pix_per_cell, cell_per_block, feature_vec=False)
+    hog2 = get_hog_features(ch2, orient, pix_per_cell, cell_per_block, feature_vec=False)
+    hog3 = get_hog_features(ch3, orient, pix_per_cell, cell_per_block, feature_vec=False)
 
+    for xb in range(nxsteps):
+        for yb in range(nysteps):
+            ypos = yb*cell_per_step
+            xpos = xb*cell_per_step
+            hog_feat1 = hog1[ypos:ypos+nblocks_per_window, xpos:xpos+nblocks_per_window].ravel()
+            hog_feat2 = hog2[ypos:ypos+nblocks_per_window, xpos:xpos+nblocks_per_window].ravel()
+            hog_feat3 = hog3[ypos:ypos+nblocks_per_window, xpos:xpos+nblocks_per_window].ravel()
+            hog_features = np.concatenate(hog_feat1, hog_feat2, hog_feat3)
+
+            xleft = xpos*pix_per_cell
+            ytop = ypos*pix_per_cell
+
+            # Image patch for spatial and hist transforms.
+            sumimg = cv2.resize(trans_to_search[ytop:ytop+window, xleft:xleft+window], (64, 64))
+            # Get color features.
+            spatial_features = bin_spatial(subimg, spatial_size)
+            hist_features = color_hist(subimg, nbins=hist_bins)
+
+            # Normalize, tranform and test.
+            test_features = X_scaler.tranform(np.hstack(spatial_features, hist_features, hog_features)).reshape(1, -1)
+            test_prediction = svc.predict(test_features)
+
+            if test_prediction == 1:
+                xbox_left = np.int(xleft*scale)
+                ytop_draw = np.int(ytop*scale)
+                win_draw = np.int(window*scale)
+                cv2.rectangle(draw_img, (xbox_left, ystart + ytop_draw), 
+                        (xbox_left + win_draw, ystart + ytop_draw + win_draw), (0, 0, 255), 6)
+    return draw_img
+
+def minimum_suppression():
+    """Reduce the impact of overlapping bounding boxes."""
+    pass
+
+def add_heat_map(heatmap, bbox_list):
+    """Heat map based suppression of overlapping bounding boxes."""
+    for box in bbox_list:
+        heatmap[box[0][1]:[1][1], box[0][0]:[1][0]] += 1
+    return heatmap
+
+def apply_threshold(heatmap, threshold):
+    """Threshold away the weak pixels."""
+    heatmap[heatmap <= threshold] = 0
+    return heatmap
+
+def render_boxes(frame, boxlist):
+    """Draw the final bounding boxes on image."""
+    for box in boxlist:
+        cv2.rectangle(frame, box[0], box[1], 6)
+    return frame
+
+def process_frame(frame):
+    """Sliding window detection on the video frame."""
+    bbox_list = get_detected_windows(frame)
+    heatmap = add_heat_map(heatmap, bbox_list)
+    pruned_list = apply_threshold(heatmap, 3)
+    frame = render_boxes(frame, pruned_list)
+    return frame
+
+def video_pipeline(inputpath, outputpath):
+    """Main video pipeline."""
+    print("Start detection pipeline..\n")
+    clip = VideoFileClip(inpath)
+    output_clip = clip.fl_image(process_frame)
+    output_clip.write_videofile(outputpath, audio=False)
 
 def main():
     train_model()
