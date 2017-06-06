@@ -23,9 +23,11 @@ folders_non_vehicle = [dataset_path_non_vehicle + "Extras",
 
 folders_vehicle = [dataset_path_vehicle + "GTI_Far",
                    dataset_path_vehicle + "GTI_Left"]
-                   # dataset_path_vehicle + "GTI_MiddleClose",
-                   # dataset_path_vehicle + "GTI_Right",
-                   # dataset_path_vehicle + "KITTI_extracted"]
+
+
+# dataset_path_vehicle + "GTI_MiddleClose",
+# dataset_path_vehicle + "GTI_Right",
+# dataset_path_vehicle + "KITTI_extracted"]
 
 def data_look(car_list, notcar_list):
     """Return characteristics of the dataset."""
@@ -39,7 +41,7 @@ def data_look(car_list, notcar_list):
 
 
 def get_hog_features(img, orient, pix_per_cell, cell_per_block,
-            vis=False, feature_vec=True, transform_sqrt=False):
+                     vis=False, feature_vec=True, transform_sqrt=False):
     if vis:
         features, hog_image = hog(img, orientations=orient, pixels_per_cell=(pix_per_cell, pix_per_cell),
                                   cells_per_block=(cell_per_block, cell_per_block), transform_sqrt=transform_sqrt,
@@ -51,7 +53,8 @@ def get_hog_features(img, orient, pix_per_cell, cell_per_block,
                        visualise=False, feature_vector=feature_vec)
         return features
 
-def color_hist(img, nbins=32, bins_range=(0, 256), colorspace = 'RGB'):
+
+def color_hist(img, nbins=32, bins_range=(0, 256), colorspace='RGB'):
     # Compute the histogram of the color channels separately
     feature_image = None
     if colorspace:
@@ -64,9 +67,9 @@ def color_hist(img, nbins=32, bins_range=(0, 256), colorspace = 'RGB'):
         else:
             # print("Skipping colorspace.")
             feature_image = np.copy(img)
-    channel1_hist = np.histogram(feature_image[:,:,0], bins=nbins, range=bins_range)
-    channel2_hist = np.histogram(feature_image[:,:,1], bins=nbins, range=bins_range)
-    channel3_hist = np.histogram(feature_image[:,:,2], bins=nbins, range=bins_range)
+    channel1_hist = np.histogram(feature_image[:, :, 0], bins=nbins, range=bins_range)
+    channel2_hist = np.histogram(feature_image[:, :, 1], bins=nbins, range=bins_range)
+    channel3_hist = np.histogram(feature_image[:, :, 2], bins=nbins, range=bins_range)
     # Concatenate the histograms into a single feature vector
     hist_features = np.concatenate((channel1_hist[0], channel2_hist[0], channel3_hist[0]))
     # Return the individual histograms, bin_centers and feature vector
@@ -90,6 +93,7 @@ def bin_spatial(img, size=(32, 32), color_space='RGB'):
     features = feature_image.ravel()
     return features
 
+
 def extract_features(imgs, cspace='RGB', spatial_size=(32, 32),
                      hist_bins=32, hist_range=(0, 256)):
     features = list()
@@ -97,7 +101,6 @@ def extract_features(imgs, cspace='RGB', spatial_size=(32, 32),
     len_imgs = len(imgs)
     if imgs:
         for image in imgs:
-
             input_image = mpimage.imread(image)
             hist_features = color_hist(input_image, hist_bins, hist_range, cspace)
             spatial_features = bin_spatial(input_image, spatial_size, cspace)
@@ -113,8 +116,9 @@ def retrieve_file_names(folder):
     files = glob.glob(folder + '/' + '*.png')
     return files
 
+
 def extract_combined_features(folders, cspace='RGB', spatial_size=(32, 32),
-                     hist_bins=32, hist_range=(0, 256)):
+                              hist_bins=32, hist_range=(0, 256)):
     images = list()
     for folder in folders:
         print(folder)
@@ -125,14 +129,15 @@ def extract_combined_features(folders, cspace='RGB', spatial_size=(32, 32),
                                     hist_bins, hist_range)
     return car_features, images
 
+
 def extract_dataset(visualize=False):
     global car_features
     global noncar_features
 
     car_features, images_car = extract_combined_features(folders_vehicle, cspace='RGB', spatial_size=(32, 32),
-                                        hist_bins=32, hist_range=(0, 256))
+                                                         hist_bins=32, hist_range=(0, 256))
     noncar_features, images_noncar = extract_combined_features(folders_non_vehicle, cspace='RGB',
-                                                               spatial_size=(32, 32),hist_bins=32, hist_range=(0, 256))
+                                                               spatial_size=(32, 32), hist_bins=32, hist_range=(0, 256))
     if len(car_features):
         stacked = np.vstack((car_features, noncar_features)).astype(np.float64)
         X_scaler = StandardScaler().fit(stacked)
@@ -154,6 +159,7 @@ def extract_dataset(visualize=False):
             plt.show()
         else:
             print("Empty feature list.")
+
 
 def test_hog():
     folders = retrieve_file_names("../dataset/vehicles/GTI_Far")
@@ -177,7 +183,11 @@ def test_hog():
     plt.imshow(hog_image, cmap='gray')
     plt.title('HOG Visualization')
     plt.show()
+
+
 test_hog()
+
+
 # extract_dataset(True)
 
 def train_model():
@@ -197,6 +207,7 @@ def train_model():
     X_train, X_test, Y_train, Y_test = train_test_split(X_scaled, Y, test_size=0.2, random_state=rand_state)
     svc.fit(X_train, Y_train)
 
+
 def test_model():
     global X_test
     global Y_test
@@ -208,6 +219,7 @@ def test_model():
     plt.show()
     print("SVC Prediction: ", svc.predict(feature))
 
+
 def draw_boxes(img, bboxes, color=(0, 0, 255), thick=6):
     """Draw a rectangle for given coordinates."""
     image_copy = np.copy(img)
@@ -215,13 +227,15 @@ def draw_boxes(img, bboxes, color=(0, 0, 255), thick=6):
         cv2.rectangle(image_copy, box[0], box[1], color, thick)
     return image_copy
 
+
 def multi_scale_window():
     """Multi scale moving window implementation."""
 
 
-def sliding_window(img, x_start_stop=[None, None], y_start_stop=[None, None], xy_window=(64, 64), xy_overlap=(0.5, 0.5)):
+def sliding_window(img, x_start_stop=[None, None], y_start_stop=[None, None], xy_window=(64, 64),
+                   xy_overlap=(0.5, 0.5)):
     """Implementation of a sliding window search"""
-    list_overall = [] # storage
+    list_overall = []  # storage
     if x_start_stop[0] == None:
         x_start_stop[0] = 0
     if x_start_stop[1] == None:
@@ -252,6 +266,7 @@ def sliding_window(img, x_start_stop=[None, None], y_start_stop=[None, None], xy
             list_overall.append(((startx, endx), (starty, endy)))
     return list_overall
 
+
 def handle_colorspace(img, cspace):
     """Convert the image to given colorspace."""
     rgb_img = None
@@ -266,6 +281,7 @@ def handle_colorspace(img, cspace):
     else:
         rgb_img = img
     return rgb_img
+
 
 def single_image_features(img, cspace='RGB', spatial_size=(32, 32),
                           hist_bins=32, orient=9, pix_per_cell=8, cell_per_block=2, hog_channel=0,
@@ -288,43 +304,49 @@ def single_image_features(img, cspace='RGB', spatial_size=(32, 32),
             hog_features = []
             for channel in range(feature_image.shape[2]):
                 hog_features.extend(get_hog_features(feature_image[:, :, channel]),
-                        orient, pix_per_cell, cell_per_block, vis=False, feature_vec=True)
+                                    orient, pix_per_cell, cell_per_block, vis=False, feature_vec=True)
         else:
             hog_features = get_hog_features(feature_image[:, :, hog_channel], orient,
-                    pix_per_cell, cell_per_block, vis=False, feature_vec=True)
+                                            pix_per_cell, cell_per_block, vis=False, feature_vec=True)
         img_features.append(hog_features)
     return np.concatenate(img_features)
 
-def search_windows(img, windows, clf, scaler, color_space='RGB', spatial_size=(32, 32)
-        hist_bins=32, hist_range=(0, 256), orient=9, pix_per_cell=8, cell_per_block=2,
-        hog_channel=0, spatial_feat=True, hist_feat=True, hog_feat=True):
+
+def search_windows(img, windows, clf, scaler, color_space='RGB', spatial_size=(32, 32),
+                   hist_bins=32, hist_range=(0, 256), orient=9, pix_per_cell=8, cell_per_block=2, hog_channel=0,
+                   spatial_feat=True, hist_feat=True, hog_feat=True):
     """Given a list of windows, search for possible detection using trained
     model and return a list of detected windows."""
     detected_windows = []
     for window in windows:
         img_segment = cv2.resize(img[window[0][1]:window[1][1], window[0][0]:window[1][0]], (64, 64))
         features = single_image_features(img_segment, cspace=color_space, spatial_size=spatial_size,
-                hist_bins=hist_bins, orient=orient, pix_per_cells=pix_per_cells,
-                cell_per_block=cell_per_block, hog_channel=hog_channel, spatial_feat=spatial_feat,
-                hist_feat=hist_feat, hog_feat=hog_feat)
+                                         hist_bins=hist_bins, orient=orient, pix_per_cells=pix_per_cell,
+                                         cell_per_block=cell_per_block, hog_channel=hog_channel,
+                                         spatial_feat=spatial_feat,
+                                         hist_feat=hist_feat, hog_feat=hog_feat)
         test_features = scaler.transform(np.array(features).reshape(1, -1))
         prediction = clf.predict(test_features)
         if prediction == 1:
             detected_windows.append(window)
     return detected_windows
 
+
 def heatmap_handler(windows):
     """Takes an input of windows are merges based on heatmap."""
     pass
+
 
 def pipeline(image):
     output_image = None
     return output_image
 
+
 def find_cars(img, ystart, ystop, scale, svc, orient, pix_per_cell, cell_per_block,
-        spatial_size, hist_bins):
+              spatial_size, hist_bins):
     """Search for the cars."""
     draw_img = np.copy(img)
+
 
 
 def main():
@@ -332,5 +354,6 @@ def main():
     test_model()
     find_cars()
 
-if __main__ == '__main__':
+
+if __name__ == '__main__':
     main()
