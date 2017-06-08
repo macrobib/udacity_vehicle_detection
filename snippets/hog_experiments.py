@@ -86,7 +86,7 @@ def bin_spatial(img, size=(32, 32), color_space='RGB'):
     return features
 
 def extract_features(imgs, cspace='RGB', spatial_size=(32, 32),
-                     hist_bins=32, hist_range=(0, 256)):
+                     hist_bins=32, hist_range=(0, 256), debug = False):
     features = list()
     orient = 9
     pix_per_cell = 8
@@ -96,24 +96,36 @@ def extract_features(imgs, cspace='RGB', spatial_size=(32, 32),
     len_imgs = len(imgs)
     if imgs:
         for image in imgs:
+            img_features = []
+            hog_features = []
             input_image = cv2.imread(image)
+            img_shape = input_image.shape
+            input_image = cv2.resize(input_image, (64, 64))
             input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB)
+            if debug:
+                print("Image shape: Prev{0} -- Curr{1}\n".format(img_shape, input_image.shape))
             hist_features = color_hist(input_image, hist_bins, hist_range, cspace)
+            img_features.append(hist_features)
             spatial_features = bin_spatial(input_image, spatial_size, cspace)
+            img_features.append(spatial_features)
             hog1 = get_hog_features(input_image[:, :, 0], orient,
                                                    pix_per_cell, cell_per_block,
                                                    vis=False, feature_vec=False)
+            hog_features.append(hog1)
             hog2 = get_hog_features(input_image[:, :, 1], orient,
                                             pix_per_cell, cell_per_block,
                                             vis=False, feature_vec=False)
+            hog_features.append(hog2)
             hog3 = get_hog_features(input_image[:, :, 2], orient,
                                             pix_per_cell, cell_per_block,
                                             vis=False, feature_vec=False)
-            hog_features = np.concatenate((hog1.ravel(), hog2.ravel(), hog3.ravel()))
-            norm_feature = np.concatenate((hist_features, spatial_features, hog_features))
+            hog_features.append(hog3)
+            hog_features = np.ravel(hog_features)
+            img_features.append(hog_features)
+            norm_feature = np.concatenate(img_features)
             # vert_stack = np.vstack([hist_features, spatial_features])
             # norm_feature = StandardScaler().fit(vert_stack).transform(vert_stack)
-            features.append(norm_feature.ravel())
+            features.append(norm_feature)
     print("Extract features: End,  {0} images processed.".format(len_imgs))
     return features
 
@@ -122,9 +134,7 @@ def extract_combined_features(folders, cspace='RGB', spatial_size=(32, 32),
                               hist_bins=32, hist_range=(0, 256)):
     images = []
     for folder in folders:
-        print(folder)
         val = retrieve_file_names(folder)
-        print(val)
         images = images + val
     car_features = extract_features(images, cspace, spatial_size,
                                     hist_bins, hist_range)
@@ -255,9 +265,17 @@ def train_model():
 def test_model():
     global X_test
     global Y_test
+    cspace='YCrCb'
+    spatial_size=(32, 32)                                                                                                                            
+    hist_bins=32
+    hist_range=(0, 256)
     print("test accuracy: ", round(svc.score(X_test, Y_test), 4))
-    img_path = "D:\\pycharmprojects\\udacity_vehicle_detection\\test_images\\cutout1.jpg"
-    feature = extract_features([img_path])
+    #img_path = "D:\\pycharmprojects\\udacity_vehicle_detection\\test_images\\cutout1.jpg"
+    img_path = "../test_images/cutout1.jpg"
+    feature = extract_features([img_path], cspace, spatial_size, hist_bins, hist_range, True)
+    np_feature = np.array(feature)
+    print("Test feature length and shape: ", len(feature),"--",  np_feature.shape)
+    print("\n")
     prediction =  svc.predict(feature)
     vis = mpimage.imread(img_path)
     plt.imshow(vis)
@@ -282,11 +300,6 @@ def draw_boxes(img, bboxes, color=(0, 0, 255), thick=6):
     return image_copy
 
 
-def multi_scale_window():
-    """Multi scale moving window implementation."""
-    pass
-
-
 def sliding_window(img, x_start_stop=[None, None], y_start_stop=[None, None], xy_window=(64, 64),
                    xy_overlap=(0.5, 0.5)):
     """Implementation of a sliding window search"""
@@ -308,8 +321,8 @@ def sliding_window(img, x_start_stop=[None, None], y_start_stop=[None, None], xy
 
     nx_buffer = np.int(xy_window[0] * xy_overlap[0])
     ny_buffer = np.int(xy_window[1] * xy_overlap[1])
-    nx_windows = np.int((xspan - nx_buffer))
-    ny_windows = np.int((yspan - ny_buffer))
+    nx_windows = np.int((xspan - nx_buffer)/nx_pix_per_step)
+    ny_windows = np.int((yspan - ny_buffer)/ny_pix_per_step)
 
     for ys in range(ny_windows):
         for xs in range(nx_windows):
@@ -318,7 +331,7 @@ def sliding_window(img, x_start_stop=[None, None], y_start_stop=[None, None], xy
             endx = startx + xy_window[0]
             starty = ys * ny_pix_per_step + y_start_stop[0]
             endy = starty + xy_window[1]
-            list_overall.append(((startx, endx), (starty, endy)))
+            list_overall.append(((startx, starty), (endx, endy)))
     return list_overall
 
 
@@ -466,9 +479,23 @@ def find_cars(img, ystart, ystop, scale, svc, orient, pix_per_cell, cell_per_blo
                         (xbox_left + win_draw, ystart + ytop_draw + win_draw), (0, 0, 255), 6)
     return draw_img
 
-def get_detected_windows(frame):
+def get_detected_windows(frame, debug=False):
     """Get coordinates for detected windows."""
-    pass
+    y_start_stop = [400, 656]
+    y_start = 100
+    y_stop = 656
+    scale = 1.5
+
+    coord_windows = sliding_window(frame, x_start_stop=[None, None], y_start_stop=y_start_stop,
+            xy_window=(256, 256), xy_overlap=(0.5, 0.5))
+    if debug:
+        debug_cpy = np.copy(frame)
+        debug_cpy = draw_boxes(debug_cpy, coord_windows)
+        plt.imshow(debug_cpy)
+        plt.show()
+    detected_windows = find_cars(frame, ystart, ystop, scale, svc, orient=9,
+            pixel_per_cell=8, cell_per_block=2, spatial_size=(32, 32), hist_bins=32)
+    return detected_windows
 
 def minimum_suppression():
     """Reduce the impact of overlapping bounding boxes."""
@@ -496,7 +523,7 @@ def process_frame(frame):
     global heatmap
     plt.imshow(frame)
     plt.show()
-    bbox_list = get_detected_windows(frame)
+    bbox_list = get_detected_windows(frame, True)
     heatmap = add_heat_map(heatmap, bbox_list)
     pruned_list = apply_threshold(heatmap, 3)
     frame = render_boxes(frame, pruned_list)
