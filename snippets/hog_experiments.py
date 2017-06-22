@@ -2,6 +2,7 @@ import random
 import glob
 import cv2
 import os
+import math
 import pickle
 from moviepy.editor import VideoFileClip 
 import numpy as np
@@ -24,7 +25,6 @@ X_test = None
 Y_test = None
 scaling_param = None
 svc = LinearSVC(loss='hinge')
-# svc = SVC()
 heatmap = None
 # Frame coordinate windows:
 coord_windows_bottom = None
@@ -32,8 +32,14 @@ coord_windows_middle = None
 coord_windows_top = None
 boxes_prev= None
 heatmap_prev = np.zeros((720, 1280))
-heatmap_deque = deque(maxlen=4)
+heatmap_deque = deque(maxlen=10)
 centroid_deque = deque(maxlen=10)
+default_cspace = 'YCrCb'
+# keep track of centroids in terms of direction,  previous centroid, window size(w, h).
+centroid_tracker = {}
+prev_value = 0
+cont_count = 0
+
 frame_count = 0
 model_stored = None
 
@@ -43,14 +49,15 @@ folders_non_vehicle = [dataset_path_non_vehicle + "Extras",
 folders_vehicle = [dataset_path_vehicle + "GTI_Far",
                    dataset_path_vehicle + "GTI_Left",# ]
                    dataset_path_vehicle + "GTI_MiddleClose",
-                   dataset_path_vehicle + "GTI_Right"]#,
-                   # dataset_path_vehicle + "KITTI_extracted"]
+                   dataset_path_vehicle + "GTI_Right",
+                   dataset_path_vehicle + "KITTI_extracted"]
 
 search_ranges = {
-    "bottom": ([0, 1280], [450, 670], [128, 128]), # Tuple of search coordinates and window size.
-    "middle": ([80, 1280], [420, 550], [96, 96]),
-    "middle2": ([100, 1180], [500, 550], [64, 64]),
-    "top":  ([400, 980], [400,  500], [64, 64])
+    "bottom1": ([80, 400], [400, 670], [128, 128], [1280, 670-450]), # Tuple of search coordinates and window size.
+    "bottom2": ([860, 1280], [400, 670], [128, 128], [1280, 670-450]),
+    "middle1": ([40, 450], [400, 500], [96, 96], [1200, 550-420]),
+    "middle2": ([880, 1280], [400, 500], [96, 96], [1080, 550 - 500]),
+    "top":  ([400, 1280], [400,  540], [64, 64], [580, 600-400])
 }
 
 pickle_data = {
@@ -101,7 +108,7 @@ def extract_features(imgs, cspace='RGB', spatial_size=(16, 16),
     spatial_size = spatial_size
     hist_bins = hist_bins
     h_range = hist_range
-    orient = 9
+    orient = 8
     pix_per_cell = 8
     cell_per_block = 2
     hog_channel = 'ALL'
@@ -186,9 +193,9 @@ def extract_dataset(visualize=False):
     global car_features
     global noncar_features
 
-    car_features, images_car = extract_combined_features(folders_vehicle, cspace='YCrCb', spatial_size=(16, 16),
+    car_features, images_car = extract_combined_features(folders_vehicle, cspace=default_cspace, spatial_size=(16, 16),
                                                          hist_bins=32, hist_range=(0, 256))
-    noncar_features, images_noncar = extract_combined_features(folders_non_vehicle, cspace='YCrCb',
+    noncar_features, images_noncar = extract_combined_features(folders_non_vehicle, cspace=default_cspace,
                                                                spatial_size=(16, 16), hist_bins=32, hist_range=(0, 256))
     print("Car feature shape: ", np.array(car_features).shape)
     print("Non car feature shape: ", np.array(noncar_features).shape)
@@ -257,20 +264,28 @@ def train_model():
     scaling_param = StandardScaler().fit(X)
     X_scaled = scaling_param.transform(X)
     print("Scaled training data shape..", X_scaled.shape)
-    rand_state = np.random.randint(0, 100)
+    rand_state = np.random.randint(0, 1000)
     X_train, X_test, Y_train, Y_test = train_test_split(X_scaled, Y, test_size=0.2, random_state=rand_state)
     svc.fit(X_train, Y_train)
-    save_model(svc, scaling_param, 8, 2, 9, 'YCrCb')
+    save_model(svc, scaling_param, 8, 2, 8, default_cspace)
 
 
 def test_model():
     global X_test
     global Y_test
-    cspace='YCrCb'
-    spatial_size=(16, 16)
-    hist_bins=32
-    hist_range=(0, 256)
-    print("test accuracy: ", round(svc.score(X_test, Y_test), 4))
+    global svc
+    global scaling_param
+    global model_stored
+    svc = model_stored['svc']
+    scaling_param = model_stored['scalar']
+    pix_per_cell = model_stored['pixel_per_cell']
+    cell_per_block = model_stored['cell_per_block']
+    orient = model_stored['orient']
+    cspace = model_stored['cspace']
+    spatial_size = (16, 16)
+    hist_bins = 32
+    hist_range = (0, 256)
+    # print("test accuracy: ", round(svc.score(X_test, Y_test), 4))
     img_path = "../test_images/non-car.png"
     feature = extract_features([img_path], cspace, spatial_size, hist_bins, hist_range, True)
     np_feature = np.array(feature)
@@ -303,11 +318,7 @@ def draw_boxes(img, bboxes, color=(0, 0, 255), thick=6):
 
     image_copy = np.copy(img)
     for box in bboxes:
-        rand_1 = random.randint(50, 255)
-        rand_2 = random.randint(50, 255)
-        rand_3 = random.randint(50, 255)
-        t_color = (rand_1, rand_2, rand_3)
-        cv2.rectangle(image_copy, box[0], box[1], t_color, thick)
+        cv2.rectangle(image_copy, box[0], box[1], color, thick)
     return image_copy
 
 
@@ -374,18 +385,18 @@ def single_image_features(img, hog_img = None, spatial_size=(16, 16),
     """Gather feature set for given single image as a combination of spatial, histogram and hog features."""
     # Compute spatial feature if flag is set.
     hog_features = []
-    if hog_img:
-        if hog_feat == True:
-            if hog_channel == 'ALL':
-                for channel in range(img.shape[2]):
-                    hog_features.extend(get_hog_features(img[:, :, channel],
-                                                         orient, pix_per_cell, cell_per_block, vis=False,
-                                                         feature_vec=True, transform_sqrt=True))
-            else:
-                hog_features = get_hog_features(img[:, :, hog_channel], orient,
-                                                pix_per_cell, cell_per_block, vis=False, feature_vec=True,
-                                                transform_sqrt=True)
-    else:
+    if hog_img is None and hog_feat == True:
+        if hog_channel == 'ALL':
+            for channel in range(img.shape[2]):
+                hog_features.extend(get_hog_features(img[:, :, channel],
+                                                     orient, pix_per_cell, cell_per_block, vis=False,
+                                                     feature_vec=True, transform_sqrt=True))
+        else:
+            hog_features = get_hog_features(img[:, :, hog_channel], orient,
+                                            pix_per_cell, cell_per_block, vis=False, feature_vec=True,
+                                            transform_sqrt=True)
+
+    elif hog_feat == True:
         hog_features = hog_img
 
     if spatial_feat == True:
@@ -417,17 +428,19 @@ def search_windows(img, windows, svc, scaling_param, hog_img = None, spatial_siz
     # else:
     #     hog_main_frame = get_hog_features(img[:, :, 0], orient=orient, pix_per_cell=pix_per_cell,
     #                                   cell_per_block=cell_per_block, feature_vec=False, transform_sqrt=True)
+    # print('hog image shape: ', np.array(hog_img).shape)
     for window in windows:
         img_segment = cv2.resize(img[window[0][1]:window[1][1], window[0][0]:window[1][0]], (64, 64), cv2.INTER_NEAREST)
-        if hog_img:
+        if hog_img is not None:
             if hog_channel == 'ALL':
                 for i in range(3):
                     # All three channels are enabled, copy 3 segments in order.
-                    hog_segment.extend(hog_img[i][window[0][1]:window[1][1], window[0][0]:window[1][0]])
+                    hog_segment.append(hog_img[i][window[0][1]:window[1][1], window[0][0]:window[1][0]])
+                    hog_segment = np.concatenate(hog_segment)
             else:
-                hog_segment = hog_img[window[0][1]:window[1][1], window[0][0]:window[1][0]]
+                hog_segment = hog_img[0][window[0][1]:window[1][1], window[0][0]:window[1][0]]
         # print("Image shape: ", img_segment.shape)
-        features = single_image_features(img_segment,hog_img=hog_segment, spatial_size=spatial_size,
+        features = single_image_features(img_segment,hog_img=None, spatial_size=spatial_size,
                                          hist_bins=hist_bins, orient=orient, pix_per_cell=pix_per_cell,
                                          cell_per_block=cell_per_block, hog_channel=hog_channel,
                                          spatial_feat=spatial_feat,
@@ -523,13 +536,51 @@ def find_cars(img, ystart, ystop, scale,X_scaler, svc, orient, pix_per_cell, cel
 
 def get_detected_windows(frame, debug=False):
     """Get coordinates for detected windows."""
-    scale = 1.5
-    global svc
-    global scaling_param
     global coord_windows_bottom
     global coord_windows_middle
     global coord_windows_top
 
+    if coord_windows_bottom is None:
+        coord_windows_bottom = sliding_window(frame, x_start_stop=search_ranges["bottom1"][0],
+                                              y_start_stop=search_ranges["bottom1"][1],
+                                              xy_window=search_ranges["bottom1"][2], xy_overlap=(0.6, 0.6))
+        coord_windows_bottom += sliding_window(frame, x_start_stop=search_ranges["bottom2"][0],
+                                              y_start_stop=search_ranges["bottom2"][1],
+                                              xy_window=search_ranges["bottom2"][2], xy_overlap=(0.6, 0.6))
+
+    # if coord_windows_middle is None:
+    #     coord_windows_middle = sliding_window(frame, x_start_stop=search_ranges["middle1"][0],
+    #                                           y_start_stop=search_ranges["middle1"][1],
+    #                                           xy_window=search_ranges["middle1"][2], xy_overlap=(0.4, 0.4))
+    #     coord_windows_middle += sliding_window(frame, x_start_stop=search_ranges["middle2"][0],
+    #                                           y_start_stop=search_ranges["middle2"][1],
+    #                                           xy_window=search_ranges["middle2"][2], xy_overlap=(0.6, 0.6))
+
+    if coord_windows_top is None:
+        coord_windows_top = sliding_window(frame, x_start_stop=search_ranges["top"][0],
+                                           y_start_stop=search_ranges["top"][1],
+                                           xy_window=search_ranges["top"][2], xy_overlap=(0.6, 0.6))
+    # coord_windows = coord_windows_top + coord_windows_middle + coord_windows_bottom
+    if debug:
+        debug_cpy = np.copy(frame)
+        debug_cpy = draw_boxes(debug_cpy, coord_windows_top, color=(255, 0, 0))
+        debug_cpy = draw_boxes(debug_cpy, coord_windows_bottom, color=(0, 0, 255))
+        # debug_cpy = draw_boxes(debug_cpy, coord_windows_middle, color=(255,255,0))
+
+        plt.imshow(debug_cpy)
+        plt.show()
+
+    frame = handle_colorspace(frame, default_cspace)
+    detected_windows = search_window_abstracted(frame, coord_windows_bottom)
+    # detected_windows += search_window_abstracted(frame, coord_windows_middle)
+    detected_windows += search_window_abstracted(frame, coord_windows_top)
+    return detected_windows
+
+def search_window_abstracted(frame, coord_windows):
+    scale = 1.5
+    global svc
+    global scaling_param
+    global model_stored
     svc = model_stored['svc']
     scaling_param = model_stored['scalar']
     pix_per_cell = model_stored['pixel_per_cell']
@@ -543,98 +594,54 @@ def get_detected_windows(frame, debug=False):
     spatial_feat = True
     hist_feat = True
     hog_feat = True
-
-    if coord_windows_bottom is None:
-        coord_windows_bottom = sliding_window(frame, x_start_stop=search_ranges["bottom"][0],
-                                              y_start_stop=search_ranges["bottom"][1],
-                                              xy_window=search_ranges["bottom"][2], xy_overlap=(0.2, 0.2))
-
-    if coord_windows_middle is None:
-        coord_windows_middle = sliding_window(frame, x_start_stop=search_ranges["middle"][0],
-                                              y_start_stop=search_ranges["middle"][1],
-                                              xy_window=search_ranges["middle2"][2], xy_overlap=(0.4, 0.4))
-
-    if coord_windows_top is None:
-        coord_windows_top = sliding_window(frame, x_start_stop=search_ranges["top"][0],
-                                           y_start_stop=search_ranges["top"][1],
-                                           xy_window=search_ranges["top"][2], xy_overlap=(0.5, 0.5))
-
-    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2YCrCb)
-
-    coord_windows = coord_windows_top + coord_windows_middle + coord_windows_bottom
-    if debug:
-        debug_cpy = np.copy(frame)
-        debug_cpy = draw_boxes(debug_cpy, coord_windows)
-        plt.imshow(debug_cpy)
-        plt.show()
-
-    # with Pool(processes=4) as pool:
-    #     res_bottom = pool.apply_async(search_windows, (frame, coord_windows_bottom, svc, scaling_param, spatial_size, hist_bins, hist_range,
-    #                                   orient, pix_per_cell, cell_per_block, hog_channel, spatial_feat, hist_feat, hog_feat, ))
-    #
-    #     res_middle = pool.apply_async(search_windows, (frame, coord_windows_middle, svc, scaling_param, spatial_size, hist_bins, hist_range,
-    #                                   orient, pix_per_cell, cell_per_block, hog_channel, spatial_feat, hist_feat, hog_feat, ))
-    #
-    #     res_top = pool.apply_async(search_windows, (frame, coord_windows_top, svc, scaling_param, spatial_size, hist_bins, hist_range,
-    #                                   orient, pix_per_cell, cell_per_block, hog_channel, spatial_feat, hist_feat, hog_feat, ))
-    #     det_bottom = res_bottom.get()
-    #     det_middle = res_middle.get()
-    #     det_top = res_top.get()
-    #     detected_windows = det_bottom + det_middle + det_top
-    # Retrieve the hog features for three segments in one chunk.
-    hog_feature_top = None
-    hog_feature_middle = None
-    hog_feature_bottom = None
-
-    detected_windows = search_windows(frame, coord_windows_top, svc, scaling_param, spatial_size=spatial_size,
-                                      hist_bins=hist_bins, hist_range=hist_range,
-                                      orient=orient, pix_per_cell=pix_per_cell, cell_per_block=cell_per_block,
-                                      hog_channel=hog_channel,
-                                      spatial_feat=spatial_feat, hist_feat=hist_feat, hog_feat=hog_feat)
-    detected_windows += search_windows(frame, coord_windows, svc, scaling_param, spatial_size=spatial_size,
-                                      hist_bins=hist_bins, hist_range=hist_range,
-                                      orient=orient, pix_per_cell=pix_per_cell, cell_per_block=cell_per_block,
-                                      hog_channel=hog_channel,
-                                      spatial_feat=spatial_feat, hist_feat=hist_feat, hog_feat=hog_feat)
-    detected_windows += search_windows(frame, coord_windows_bottom, svc, scaling_param, spatial_size=spatial_size,
-                                      hist_bins=hist_bins, hist_range=hist_range,
-                                      orient=orient, pix_per_cell=pix_per_cell, cell_per_block=cell_per_block,
-                                      hog_channel=hog_channel,
-                                      spatial_feat=spatial_feat, hist_feat=hist_feat, hog_feat=hog_feat)
-
-    return detected_windows
-
-def search_window_abstracted(frame, coord_windows):
-    scale = 1.5
-    color_space = 'YCrCb'
-    spatial_size = (16, 16)
-    hist_bins = 32
-    hist_range = (0, 256)
-    orient = 9
-    pix_per_cell = 8
-    cell_per_block = 2
-    hog_channel = 'ALL'
-    spatial_feat = True
-    hist_feat = True
-    hog_feat = True
-    global svc
-    global scaling_param
-    global coord_windows_bottom
-    global coord_windows_middle
-    global coord_windows_top
     detected_windows = search_windows(frame, coord_windows, svc, scaling_param, spatial_size=spatial_size, hist_bins=hist_bins, hist_range=hist_range,
                                       orient=orient, pix_per_cell=pix_per_cell, cell_per_block=cell_per_block, hog_channel=hog_channel,
                                       spatial_feat=spatial_feat, hist_feat=hist_feat, hog_feat=hog_feat)
     return detected_windows
 
 
-def track_centroid():
-    """Keep track of centroid of detected windows."""
-    pass
+def init_centroid_tracker(n):
+    """Initialize centroid tracker for n instances"""
+    global centroid_tracker
+    for i in range(n):
+        box_size = [0, 0] # Box size of the window.
+        centroid_pos = [-1, -1] # Centroid coordinates.
+        centroid_delta = [0, 0] # Movement delta value of centroid, movement since previous frame in x and y direction.
+        centroid_tracker[i] = [centroid_pos, box_size, centroid_delta]
 
-def minimum_suppression():
-    """Reduce the impact of overlapping bounding boxes."""
-    pass
+def centroid(coord):
+    return [(coord[0][0] + coord[1][0])/2, (coord[0][1] + coord[1][1])/2]
+
+
+def get_box_size(coord):
+    window_size = 64
+    if coord[1] > 550:
+        window_size = 128
+    elif 450 < coord[1] < 550:
+        window_size = 96
+    elif 400 < coord[1] < 450:
+        window_size = 64
+    return window_size
+
+
+def get_coordinate_from_centroid(coord):
+    """Retrieve bounding box from centroid."""
+    window_size_half = 32
+    window_size_half = get_box_size(coord)/2
+
+    x1 = max(0, (coord[0] - window_size_half))
+    y1 = max(0, (coord[1] - window_size_half))
+    x2 = min(1280, (coord[0] + window_size_half))
+    y2 = min(720, (coord[0] + window_size_half))
+    return ((x1, y1), (x2, y2))
+
+
+def get_square_root_distance(coords):
+    a = coords[0]
+    b = coords[1]
+    distance = math.sqrt((b[0] - a[0])**2 + (b[1] - a[1])**2)
+    return distance
+
 
 def add_heat_map(heatmap, bbox_list):
     """Heat map based suppression of overlapping bounding boxes."""
@@ -642,28 +649,58 @@ def add_heat_map(heatmap, bbox_list):
         heatmap[box[0][1]:box[1][1], box[0][0]:box[1][0]] += 1
     return heatmap
 
+
 def apply_threshold(heatmap, threshold):
     """Threshold away the weak pixels."""
     heatmap[heatmap <= threshold] = 0
     return heatmap
 
+
 def get_thresholded_boxes(labels):
     """Return the thresholded bounding boxes got from heatmap."""
+    global centroid_tracker
+    global prev_value
+    global cont_count
     bboxes = []
-    for car_number in range(1, labels[1] + 1):
-        nonzero = (labels[0] == car_number).nonzero()
-        # Determine X and Y values of the pixels.
-        nonzeroy = np.array(nonzero[0])
-        nonzerox = np.array(nonzero[1])
-        min_coord = (np.min(nonzerox), np.min(nonzeroy))
-        max_coord = (np.max(nonzerox), np.max(nonzeroy))
-        bboxes.append((min_coord, max_coord))
-    return bboxes
+    print("Label count: ", labels[1])
+    if labels[1]:
+        for car_number in range(1, labels[1] + 1):
+            nonzero = (labels[0] == car_number).nonzero()
+            # Determine X and Y values of the pixels.
+            cont_count = 0
+            nonzeroy = np.array(nonzero[0])
+            nonzerox = np.array(nonzero[1])
+            min_coord = (np.min(nonzerox), np.min(nonzeroy))
+            max_coord = (np.max(nonzerox), np.max(nonzeroy))
+            bboxes.append((min_coord, max_coord))
+            cent = centroid((min_coord, max_coord))
+            tracker_instance = centroid_tracker[car_number - 1]
+            if tracker_instance[0][0] != -1:
+                sqr_distance = get_square_root_distance((tracker_instance[0][0], cent))
+                wnd_size = get_box_size(cent)
+                if sqr_distance <= wnd_size:
+                    x_delta = cent[0] - tracker_instance[2][0]
+                    y_delta = cent[1] - tracker_instance[2][1]
+                    centroid_tracker[car_number][2] = (x_delta, y_delta)
+                    centroid_tracker[car_number][1] = wnd_size
+                    centroid_tracker[car_number][0] = cent
+    else:
+        cont_count += 1
+        if cont_count % 10 == 0:
+            for i in centroid_tracker.keys():
+                delta = centroid_tracker[i][2]
+                centroid_tracker[i][0][0] += delta[0]
+                centroid_tracker[i][0][1] += delta[1]
 
+
+
+
+    return bboxes
 
 def render_boxes(frame, boxlist, debug = False):
     """Draw the final bounding boxes on image."""
     for box in boxlist:
+        # print("centroid: ", centroid(box))
         cv2.rectangle(frame, box[0], box[1], (0, 0, 255), 6)
     if debug:
         plt.imshow(frame)
@@ -671,34 +708,70 @@ def render_boxes(frame, boxlist, debug = False):
     return frame
 
 
+def patch_search(frame, coordinates):
+    """Do a fine grained search on previous and new heatmap coordinates."""
+    new_windows = []
+    for coordinate in coordinates:
+        x1, x2, y1, y2 = 0, 0, 0, 0
+        x1 = coordinate[0][0] - 10
+        if x1 < 0:
+            x1 = 0
+        x2 = coordinate[1][0] + 10
+        if x2 > 1280:
+            x2 = 1280
+        y1 = coordinate[0][1] - 10
+        if y1 < 0:
+            y1 = 0
+        y2 = coordinate[1][1] + 10
+        if y2 > 720:
+            y2 = 720
+
+        new_coords = sliding_window(frame[y1:y2, x1:x2], x_start_stop=[None, None],
+                       y_start_stop=[None, None],
+                       xy_window=[64, 64], xy_overlap=(0.4, 0.4))
+        new_windows += search_window_abstracted(frame[y1:y2, x1:x2], new_coords)
+    return new_windows
+
 def process_frame(frame):
     """Sliding window detection on the video frame."""
     global heatmap_prev
     global boxes_prev
     global frame_count
     global heatmap_deque
-    bbox_list = boxes_prev
-    frame_count = 1
+
+    frame_count += 1
     draw_boxes_on_frame = False
     print("Image shape: ", frame.shape)
+    heatmap_current = np.zeros_like(frame[:, :, 0]).astype(np.float)
     if frame_count:
-        heatmap_current = np.zeros_like(frame[:, :, 0]).astype(np.float)
         detected_windows = get_detected_windows(frame, False)
         heatmap_current = add_heat_map(heatmap_current, detected_windows)
         heatmap_deque.append(heatmap_current)
-        if len(heatmap_deque) == 4:
-            heatmap_new = sum(heatmap_deque)
-            heatmap_new = apply_threshold(heatmap_new, 2)
-            clipped_heatmap = np.clip(heatmap_new, 0, 255)
-            # plt.imshow(heatmap_new, cmap='hot')
-            # plt.title("heatmap")
-            # plt.show()
-            labels = label(clipped_heatmap)
-            bbox_list = get_thresholded_boxes(labels)
+        boxes_prev = detected_windows
+        # if len(heatmap_deque) == 5:
+        heatmap_new = sum(heatmap_deque)
+        heatmap_new = apply_threshold(heatmap_new, 4)
+        clipped_heatmap = np.clip(heatmap_new, 0, 255)
+        labels = label(clipped_heatmap)
+        bbox_list = get_thresholded_boxes(labels)
+        boxes_prev = bbox_list
+        draw_boxes_on_frame = True
+    else:
+        # Do a trageted search every alternate frames.
+        new_windows = patch_search(frame, boxes_prev)
+        heatmap_current = add_heat_map(heatmap_current, new_windows)
+        heatmap_current = sum(heatmap_deque) + heatmap_current
+        heatmap_current = apply_threshold(heatmap_current, 5)
+        clipped_heatmap = np.clip(heatmap_current, 0, 255)
+        labels = label(clipped_heatmap)
+        bbox_list = get_thresholded_boxes(labels)
+        if len(bbox_list):
             boxes_prev = bbox_list
-            draw_boxes_on_frame = True
+        else:
+            bbox_list = boxes_prev
     if draw_boxes_on_frame:
         frame = render_boxes(frame, bbox_list, False)
+        print(cont_count)
     return frame
 
 
@@ -717,6 +790,7 @@ def main():
     else:
         model_stored = load_model()
     # test_model()
+    init_centroid_tracker(10)
     video_pipeline("../videos/project_video.mp4", "../videos/output.mp4")
 
 if __name__ == '__main__':
