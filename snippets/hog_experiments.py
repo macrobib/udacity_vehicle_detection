@@ -199,28 +199,6 @@ def extract_dataset(visualize=False):
                                                                spatial_size=(16, 16), hist_bins=32, hist_range=(0, 256))
     print("Car feature shape: ", np.array(car_features).shape)
     print("Non car feature shape: ", np.array(noncar_features).shape)
-    # if len(car_features):
-    #     stacked = np.vstack((car_features, noncar_features)).astype(np.float64)
-    #     print("extracted data shape: ", stacked.shape)
-        # X_scaler = StandardScaler().fit(stacked)
-        # scaled_X = X_scaler.transform(stacked)
-        # if visualize:
-        #     car_ind = np.random.randint(0, len(images_car))
-        #     # Plot an example of raw and scaled features
-        #     fig = plt.figure(figsize=(12, 4))
-        #     plt.subplot(131)
-        #     plt.imshow(mpimage.imread(images_car[car_ind]))
-        #     plt.title('Original Image')
-        #     plt.subplot(132)
-        #     plt.plot(stacked[car_ind])
-        #     plt.title('Raw Features')
-        #     plt.subplot(133)
-        #     plt.plot(scaled_X[car_ind])
-        #     plt.title('Normalized Features')
-        #     fig.tight_layout()
-        #     plt.show()
-        # else:
-        #     print("Empty feature list.")
 
 
 def test_hog():
